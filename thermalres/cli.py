@@ -59,16 +59,17 @@ def main(argv: list[str] | None = None):
     )
 
     kernel = CoSimKernel(config)
-    metrics, chunks, timeseries = kernel.run()
+    result = kernel.run()
 
     write_run_artifacts(
         out_path=config.out_dir,
-        metrics=metrics,
-        chunks=chunks,
-        timeseries=timeseries,
+        metrics=result.metrics,
+        chunks=result.chunks,
+        timeseries=result.timeseries,
+        events=result.events,
     )
     metrics_file = config.out_dir.joinpath("metrics.json")
 
-    print(f"{metrics.scenario_name}: ", end="")
-    print(f"cycles={metrics.total_cycles} ", end="")
-    print(f"chunks={metrics.total_chunks} -> {metrics_file}")
+    print(f"{result.metrics.scenario_name}: ", end="")
+    print(f"cycles={result.metrics.total_cycles} ", end="")
+    print(f"chunks={result.metrics.total_chunks} -> {metrics_file}")

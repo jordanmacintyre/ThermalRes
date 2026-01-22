@@ -23,7 +23,18 @@ These goals shape every design decision in Milestone 1.
 
 ## Current Status
 
-**Milestone 3 — Kernel-Plant Integration (Current)**
+**Milestone 4 — Closed-Loop Control and Event Realization (Current)**
+
+The kernel now supports feedback control and deterministic event sampling:
+- **Controller interface**: Pluggable controller protocol with `reset()` and `step()` methods
+- **Bang-bang controller**: Simple threshold-based incremental controller
+- **PID controller**: Incremental PID with anti-windup and directional unlock boost
+- **Closed-loop operation**: Controllers compute heater duty from plant feedback
+- **Event realization**: Bernoulli sampling converts CRC probabilities to binary events
+- **Expanded artifacts**: `events.jsonl` captures per-cycle CRC failure events
+- **System-level tests**: Closed-loop stability, determinism, and convergence validation
+
+**Milestone 3 — Kernel-Plant Integration (Complete)**
 
 The kernel now drives the plant models as the authoritative timebase:
 - **PlantRunner**: Clean glue layer between kernel and plant models
@@ -31,8 +42,6 @@ The kernel now drives the plant models as the authoritative timebase:
 - **Time-series artifacts**: Per-chunk plant state recorded to `timeseries.json`
 - **System-level tests**: End-to-end kernel+plant integration validation
 - **Deterministic**: Identical configs produce identical results
-
-No feedback control yet—inputs are scheduled, not computed from plant state.
 
 **Milestone 2 — Plant Models (Complete)**
 
@@ -52,7 +61,7 @@ The foundation provides:
 - Explicit time chunking
 - Structured JSON run artifacts
 
-There are **no closed-loop controllers or RTL integration yet**.
+There is **no RTL integration yet**.
 
 ---
 
@@ -64,11 +73,33 @@ At a high level, the project currently looks like this:
 CLI
  |-- SimConfig (run definition)
        |-- CoSimKernel (time advancement)
-             |-- ChunkSummary[]
-             |-- RunMetrics
-                   |
-                   v
-              metrics.json (artifact)
+             |
+             |-- Controller (optional, Milestone 4)
+             |     |-- PIDController or BangBangController
+             |     |-- Computes heater duty from plant feedback
+             |
+             |-- PlantRunner (Milestone 3)
+             |     |-- Maintains ThermalState
+             |     |-- Steps plant chain per chunk
+             |
+             |-- EventSampler (Milestone 4)
+             |     |-- Realizes CRC events from probabilities
+             |
+             |-- Schedule (open-loop scenarios)
+             |     |-- Provides heater/workload inputs
+             |
+             v
+       RunResult:
+         |-- RunMetrics
+         |-- ChunkSummary[]
+         |-- TimeSeriesSample[]
+         |-- CrcEvent[]
+             |
+             v
+       Artifacts:
+         |-- metrics.json
+         |-- timeseries.json
+         |-- events.jsonl
 
 Plant Models (Milestone 2):
   ThermalState + PlantInputs
@@ -84,6 +115,15 @@ Plant Models (Milestone 2):
        |
        v
   PlantOutputs (combined state)
+
+Control Loop (Milestone 4):
+  PlantOutputs + target_nm
+       |
+       v
+  Controller.step(ControlInputs) → ControlOutputs
+       |
+       v
+  heater_duty → PlantInputs
 ```
 
 Each layer has a narrow, well-defined responsibility.
@@ -222,14 +262,31 @@ They represent **interfaces**, not internal implementation details.
 
 ## Output Artifacts
 
-Every run produces a structured artifact:
+Every run produces structured artifacts:
 
 ```
 artifacts/
   runs/
     <timestamp>_<scenario>/
-      metrics.json
+      metrics.json       # Run metadata and chunk summaries
+      timeseries.json    # Per-chunk plant state samples (Milestone 3+)
+      events.jsonl       # Per-cycle CRC failure events (Milestone 4+)
 ```
+
+**metrics.json** (Milestone 1):
+- Run-level metadata (name, cycles, chunks, timestamps)
+- Per-chunk summaries (start/end cycles)
+
+**timeseries.json** (Milestone 3):
+- Per-chunk samples of plant state
+- Temperature, detuning, lock status, CRC failure probability
+- Heater duty and workload fraction
+- Controller error and active status (Milestone 4)
+
+**events.jsonl** (Milestone 4):
+- Streaming JSONL format (one JSON object per line)
+- Per-cycle CRC failure events realized from probabilities
+- Deterministic Bernoulli sampling using simulation seed
 
 Artifacts are first-class outputs:
 - They enable regression testing
@@ -258,6 +315,12 @@ The test suite validates:
 - Open-loop step workload: transient response validation
 - Artifact generation: timeseries.json structure and content
 - Determinism: identical configs produce identical results
+
+**Milestone 4 Tests (4 system tests):**
+- Bang-bang controller: lock maintenance under disturbances
+- PID steady-state: convergence and stability with sustained workload
+- Controller stability: no NaN values, proper clamping, bounded outputs
+- Closed-loop determinism: identical seeds produce identical results
 
 Run all tests:
 ```bash
@@ -314,7 +377,7 @@ This ensures future refactors do not break downstream consumers.
   - 14 resonator tests: thermo-optic shift, lock boundaries
   - 14 impairment tests: monotonicity, symmetry, smoothness
 
-### Milestone 3 (current)
+### Milestone 3 (complete)
 - **PlantRunner** ([thermalres/cosim/plant_runner.py](thermalres/cosim/plant_runner.py)):
   - Encapsulates plant state evolution
   - Clean glue layer between kernel and plant models
@@ -337,8 +400,46 @@ This ensures future refactors do not break downstream consumers.
   - Artifact structure validation
   - Determinism verification
 
-### Milestone 4 (planned)
-_Closed-loop control with PID or bang-bang controller._
+### Milestone 4 (current)
+- **Controller interface** ([thermalres/control/interfaces.py](thermalres/control/interfaces.py)):
+  - `Controller` protocol with `reset()` and `step(inputs) → outputs` methods
+  - `ControlInputs`: dt, temp, detune, locked status, target setpoint
+  - `ControlOutputs`: heater duty and control error
+  - Clean separation between control and plant layers
+- **Bang-bang controller** ([thermalres/control/bang_bang.py](thermalres/control/bang_bang.py)):
+  - Threshold-based incremental controller with deadband
+  - Configurable step size and unlock boost
+  - Maintains internal duty state for bidirectional control
+- **PID controller** ([thermalres/control/pid.py](thermalres/control/pid.py)):
+  - Incremental PID: `Δu = kp*e + ki*∫e + kd*de/dt`, `u(t) = u(t-1) + Δu`
+  - Anti-windup on integrator with configurable bounds
+  - Directional unlock boost (boosts toward correcting error)
+  - Maintains operating point at steady-state with disturbances
+- **Event realization** ([thermalres/cosim/events.py](thermalres/cosim/events.py)):
+  - `EventSampler` converts CRC failure probabilities to binary events
+  - Bernoulli sampling using seeded RNG for determinism
+  - Unlocked state forces CRC failure (probability = 1.0)
+- **Kernel closed-loop support** ([thermalres/cosim/kernel.py](thermalres/cosim/kernel.py)):
+  - Optional `controller` and `detune_target_nm` parameters
+  - Closed-loop mode: controller computes heater duty from plant feedback
+  - Open-loop mode: schedule provides inputs (backward compatible)
+  - First cycle uses schedule, subsequent cycles use controller
+  - `RunResult` dataclass replaces tuple return for stability
+- **Expanded interfaces** ([thermalres/cosim/interfaces.py](thermalres/cosim/interfaces.py)):
+  - `RunResult`: single return object with metrics, chunks, timeseries, events
+  - `CrcEvent`: per-cycle CRC failure event with probability and outcome
+  - `TimeSeriesSample` extended with `controller_error` and `controller_active` fields
+- **Expanded artifacts** ([thermalres/cosim/metrics.py](thermalres/cosim/metrics.py)):
+  - `events.jsonl`: streaming JSONL format (one event per line)
+  - Each event captures cycle, chunk, failure status, and probability
+- **System-level tests** ([tests/system/test_closed_loop.py](tests/system/test_closed_loop.py)):
+  - Bang-bang lock maintenance under step disturbances
+  - PID steady-state convergence with sustained workload
+  - Controller stability (no NaN, proper clamping)
+  - Closed-loop determinism verification
+
+### Milestone 5 (planned)
+_RTL integration and hardware-in-the-loop co-simulation._
 
 ---
 

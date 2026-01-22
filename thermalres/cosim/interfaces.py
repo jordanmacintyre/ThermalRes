@@ -42,7 +42,7 @@ class PlantOutputs:
     crc_fail_prob: float    # CRC failure probability [0, 1]
 
 
-# Time-series recording (Milestone 3)
+# Time-series recording (Milestone 3+)
 
 @dataclass(frozen=True, slots=True)
 class TimeSeriesSample:
@@ -59,3 +59,36 @@ class TimeSeriesSample:
     crc_fail_prob: float    # CRC failure probability [0, 1]
     heater_duty: float      # Heater duty cycle [0, 1]
     workload_frac: float    # Workload fraction [0, 1]
+    # Milestone 4: controller outputs
+    controller_error: float | None = None    # Control error (e.g., detune error)
+    controller_active: bool = False          # Whether controller was active
+
+
+# Event recording (Milestone 4)
+
+@dataclass(frozen=True, slots=True)
+class CrcEvent:
+    """
+    A CRC failure event realized from impairment probability.
+
+    Events are deterministically sampled using the simulation seed.
+    """
+    cycle: int              # Cycle number
+    chunk_idx: int          # Chunk index
+    crc_fail: bool          # Whether CRC failure occurred
+    crc_fail_prob: float    # Probability that generated this event
+
+
+# Run results (Milestone 4)
+
+@dataclass(frozen=True, slots=True)
+class RunResult:
+    """
+    Complete results from a simulation run.
+
+    This consolidates all outputs to avoid expanding return tuples.
+    """
+    metrics: RunMetrics
+    chunks: list[ChunkSummary]
+    timeseries: list[TimeSeriesSample]
+    events: list[CrcEvent]

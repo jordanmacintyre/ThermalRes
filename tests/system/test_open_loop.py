@@ -61,16 +61,16 @@ def test_open_loop_constant_heater():
 
     # Run kernel with plant integration
     kernel = CoSimKernel(cfg, plant_runner=plant_runner, schedule=schedule)
-    metrics, chunks, timeseries = kernel.run()
+    result = kernel.run()
 
     # Basic assertions
-    assert metrics.total_cycles == 100
-    assert metrics.total_chunks == 10
-    assert len(chunks) == 10
-    assert len(timeseries) == 10  # One sample per chunk
+    assert result.metrics.total_cycles == 100
+    assert result.metrics.total_chunks == 10
+    assert len(result.chunks) == 10
+    assert len(result.timeseries) == 10  # One sample per chunk
 
     # Temperature should increase monotonically
-    temps = [s.temp_c for s in timeseries]
+    temps = [s.temp_c for s in result.timeseries]
     for i in range(len(temps) - 1):
         assert temps[i] <= temps[i + 1], f"Temperature not monotonic at index {i}"
 
@@ -82,7 +82,7 @@ def test_open_loop_constant_heater():
 
     # Resonance should shift with temperature
     resonances = [s.temp_c * plant_cfg.thermo_optic_nm_per_c + plant_cfg.lambda0_nm
-                  for s in timeseries]
+                  for s in result.timeseries]
     # Check that resonance increases
     assert resonances[-1] > resonances[0]
 
@@ -141,13 +141,13 @@ def test_open_loop_step_workload():
 
     # Run kernel
     kernel = CoSimKernel(cfg, plant_runner=plant_runner, schedule=schedule)
-    metrics, chunks, timeseries = kernel.run()
+    result = kernel.run()
 
     # Basic assertions
-    assert len(timeseries) == 10
+    assert len(result.timeseries) == 10
 
     # CRC fail probability should correlate with detuning
-    for sample in timeseries:
+    for sample in result.timeseries:
         if not sample.locked:
             # If unlocked, must fail
             assert sample.crc_fail_prob == 1.0
@@ -156,8 +156,8 @@ def test_open_loop_step_workload():
             assert 0.0 <= sample.crc_fail_prob <= 1.0
 
     # Check that detuning increases after step
-    detunes_before = [abs(s.detune_nm) for s in timeseries[:5]]
-    detunes_after = [abs(s.detune_nm) for s in timeseries[5:]]
+    detunes_before = [abs(s.detune_nm) for s in result.timeseries[:5]]
+    detunes_after = [abs(s.detune_nm) for s in result.timeseries[5:]]
 
     # After step, detuning should generally be larger
     assert max(detunes_after) >= max(detunes_before)
@@ -206,13 +206,14 @@ def test_open_loop_artifacts():
         )
 
         kernel = CoSimKernel(cfg, plant_runner=plant_runner, schedule=schedule)
-        metrics, chunks, timeseries = kernel.run()
+        result = kernel.run()
 
         write_run_artifacts(
             out_path=out_dir,
-            metrics=metrics,
-            chunks=chunks,
-            timeseries=timeseries,
+            metrics=result.metrics,
+            chunks=result.chunks,
+            timeseries=result.timeseries,
+            events=result.events,
         )
 
         # Check metrics.json exists
@@ -230,7 +231,7 @@ def test_open_loop_artifacts():
 
         # Validate sample structure
         sample = ts_data["samples"][0]
-        assert set(sample.keys()) == {
+        assert set(sample.keys()) >= {
             "cycle",
             "temp_c",
             "detune_nm",
@@ -282,7 +283,8 @@ def test_open_loop_determinism():
         )
 
         kernel = CoSimKernel(cfg, plant_runner=plant_runner, schedule=schedule)
-        _, _, timeseries = kernel.run()
+        result = kernel.run()
+        timeseries = result.timeseries
         return timeseries
 
     # Run twice
