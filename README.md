@@ -23,18 +23,27 @@ These goals shape every design decision in Milestone 1.
 
 ## Current Status
 
-**Milestone 1 — Execution Skeleton and Contracts**
+**Milestone 2 — Plant Models (Current)**
 
-At this stage, ThermalRes provides:
+ThermalRes now includes deterministic plant models:
+- **Thermal model**: First-order RC thermal network with heater and workload inputs
+- **Resonator model**: Temperature-dependent photonic resonator with lock detection
+- **Impairment model**: Detuning-based CRC failure probability mapping
+- **Plant chain**: Integrated evaluation function connecting all models
+- **Comprehensive unit tests**: 39 tests validating correctness and monotonic behavior
+
+All models are deterministic, side-effect free, and use dataclasses with type hints.
+
+**Milestone 1 — Execution Skeleton and Contracts (Complete)**
+
+The foundation provides:
 - An installable Python package
 - A stable command-line interface
 - A deterministic execution kernel
 - Explicit time chunking
 - Structured JSON run artifacts
 
-There are **no plant models, no physics, no RTL, and no co-simulation backends yet**.
-This milestone exists to establish a foundation that future complexity can attach to
-without refactoring the core.
+There are **no RTL, no co-simulation backends, and no closed-loop controllers yet**.
 
 ---
 
@@ -48,8 +57,24 @@ CLI
        |-- CoSimKernel (time advancement)
              |-- ChunkSummary[]
              |-- RunMetrics
+                   |
                    v
               metrics.json (artifact)
+
+Plant Models (Milestone 2):
+  ThermalState + PlantInputs
+       |
+       v
+  step_thermal() → ThermalState (updated)
+       |
+       v
+  eval_resonator() → ResonatorOutputs (resonance, detune, locked)
+       |
+       v
+  eval_impairment() → ImpairmentOutputs (crc_fail_prob)
+       |
+       v
+  PlantOutputs (combined state)
 ```
 
 Each layer has a narrow, well-defined responsibility.
@@ -206,31 +231,71 @@ Artifacts are first-class outputs:
 
 ## Testing Scope
 
-The current test suite validates:
+The test suite validates:
+
+**Milestone 1 Tests:**
 - Chunking behavior
 - Metric consistency
 - Artifact creation
 - Schema shape
 
-Tests focus on **contracts**, not simulation fidelity.
+**Milestone 2 Tests (39 unit tests):**
+- Thermal model: convergence to ambient, steady-state accuracy, input clamping
+- Resonator model: thermo-optic shift, lock/unlock transitions, boundary conditions
+- Impairment model: monotonic probability curves, symmetry, clamping
+
+Run all tests:
+```bash
+pytest
+```
+
+Run only plant model tests:
+```bash
+pytest tests/unit/
+```
+
+Tests focus on **contracts and correctness**, not physical fidelity.
 This ensures future refactors do not break downstream consumers.
 
 ---
 
 ## Milestones
 
-### Milestone 1 (current)
+### Milestone 1 (complete)
 - Package structure and installation
 - CLI entrypoint
 - Deterministic, chunk-based execution
 - Stable configuration and metric contracts
 - JSON run artifacts
 
-### Milestone 2 (planned)
-_Additive milestone — details to be appended._
+### Milestone 2 (current)
+- **Thermal model** ([thermalres/plant/thermal.py](thermalres/plant/thermal.py)):
+  - First-order RC network: `dT/dt = (P*R - ΔT) / (R*C)`
+  - Euler integration with configurable timestep
+  - Heater and workload power inputs
+- **Resonator model** ([thermalres/plant/resonator.py](thermalres/plant/resonator.py)):
+  - Thermo-optic wavelength shift: `λ = λ₀ + α*(T - T_amb)`
+  - Lock detection within tolerance window
+  - Detuning calculation (signed)
+- **Impairment model** ([thermalres/plant/impairment.py](thermalres/plant/impairment.py)):
+  - Smooth CRC failure probability vs. detuning
+  - Cubic smoothstep mapping centered at 50% point
+  - Unlocked state forces 100% failure
+- **Plant chain helper** ([thermalres/plant/__init__.py](thermalres/plant/__init__.py)):
+  - `eval_plant_chain()` integrates all three models
+  - Takes `ThermalState` + `PlantInputs`
+  - Returns updated `ThermalState` + `PlantOutputs`
+- **Configuration defaults** ([thermalres/config.py](thermalres/config.py)):
+  - `PlantConfig` dataclass with reasonable defaults
+  - Ambient temp 25°C, R_th=10°C/W, C_th=0.1 J/°C
+  - λ₀=1550nm, α=0.1nm/°C, lock window ±0.5nm
+- **Comprehensive unit tests** ([tests/unit/](tests/unit/)):
+  - 11 thermal tests: convergence, steady-state, immutability
+  - 14 resonator tests: thermo-optic shift, lock boundaries
+  - 14 impairment tests: monotonicity, symmetry, smoothness
 
 ### Milestone 3 (planned)
-_Additive milestone — details to be appended._
+_Controller integration and closed-loop operation._
 
 ---
 
