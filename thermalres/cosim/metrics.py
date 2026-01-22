@@ -4,19 +4,29 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
-from .interfaces import ChunkSummary, RunMetrics
+from .interfaces import ChunkSummary, RunMetrics, TimeSeriesSample
 
 
 def write_run_artifacts(
-        *, 
-        out_path: Path, 
-        metrics: RunMetrics, 
-        chunks: list[ChunkSummary]
+        *,
+        out_path: Path,
+        metrics: RunMetrics,
+        chunks: list[ChunkSummary],
+        timeseries: list[TimeSeriesSample] | None = None,
     ) -> None:
-    
+    """
+    Write simulation artifacts to disk.
+
+    Args:
+        out_path: Output directory
+        metrics: Run-level metrics
+        chunks: Chunk summaries
+        timeseries: Optional time-series samples (Milestone 3+)
+    """
     out_path = Path(out_path)
     out_path.mkdir(parents=True, exist_ok=True)
 
+    # Write metrics.json (Milestone 1)
     payload = {
         "run": asdict(metrics),
         "chunks": [asdict(c) for c in chunks],
@@ -24,3 +34,14 @@ def write_run_artifacts(
 
     metrics_path = out_path.joinpath("metrics.json")
     metrics_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    # Write timeseries.json (Milestone 3+)
+    if timeseries is not None and len(timeseries) > 0:
+        timeseries_payload = {
+            "samples": [asdict(s) for s in timeseries],
+        }
+        timeseries_path = out_path.joinpath("timeseries.json")
+        timeseries_path.write_text(
+            json.dumps(timeseries_payload, indent=2) + "\n",
+            encoding="utf-8"
+        )

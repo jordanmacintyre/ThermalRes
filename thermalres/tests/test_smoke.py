@@ -19,7 +19,7 @@ def test_smoke_kernel_and_artifacts() -> None:
     )
 
     kernel = CoSimKernel(cfg)
-    metrics, chunks = kernel.run()
+    metrics, chunks, timeseries = kernel.run()
 
     # cycles=10 with chunk=4 -> [0-4), [4-8), [8-10) => 3 chunks
     assert metrics.total_cycles == 10
@@ -29,9 +29,12 @@ def test_smoke_kernel_and_artifacts() -> None:
     assert chunks[1].start_cycle == 4 and chunks[1].end_cycle == 8
     assert chunks[2].start_cycle == 8 and chunks[2].end_cycle == 10
 
+    # Timeseries should be empty (no plant runner)
+    assert len(timeseries) == 0
+
     with TemporaryDirectory() as td:
         out_dir = Path(td).joinpath("run")
-        write_run_artifacts(out_path=out_dir, metrics=metrics, chunks=chunks)
+        write_run_artifacts(out_path=out_dir, metrics=metrics, chunks=chunks, timeseries=timeseries)
 
         p = out_dir.joinpath("metrics.json")
         assert p.exists()

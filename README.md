@@ -23,16 +23,25 @@ These goals shape every design decision in Milestone 1.
 
 ## Current Status
 
-**Milestone 2 — Plant Models (Current)**
+**Milestone 3 — Kernel-Plant Integration (Current)**
 
-ThermalRes now includes deterministic plant models:
+The kernel now drives the plant models as the authoritative timebase:
+- **PlantRunner**: Clean glue layer between kernel and plant models
+- **Open-loop scenarios**: Deterministic input schedules (constant, step, ramp)
+- **Time-series artifacts**: Per-chunk plant state recorded to `timeseries.json`
+- **System-level tests**: End-to-end kernel+plant integration validation
+- **Deterministic**: Identical configs produce identical results
+
+No feedback control yet—inputs are scheduled, not computed from plant state.
+
+**Milestone 2 — Plant Models (Complete)**
+
+Deterministic plant models:
 - **Thermal model**: First-order RC thermal network with heater and workload inputs
 - **Resonator model**: Temperature-dependent photonic resonator with lock detection
 - **Impairment model**: Detuning-based CRC failure probability mapping
 - **Plant chain**: Integrated evaluation function connecting all models
 - **Comprehensive unit tests**: 39 tests validating correctness and monotonic behavior
-
-All models are deterministic, side-effect free, and use dataclasses with type hints.
 
 **Milestone 1 — Execution Skeleton and Contracts (Complete)**
 
@@ -43,7 +52,7 @@ The foundation provides:
 - Explicit time chunking
 - Structured JSON run artifacts
 
-There are **no RTL, no co-simulation backends, and no closed-loop controllers yet**.
+There are **no closed-loop controllers or RTL integration yet**.
 
 ---
 
@@ -244,14 +253,25 @@ The test suite validates:
 - Resonator model: thermo-optic shift, lock/unlock transitions, boundary conditions
 - Impairment model: monotonic probability curves, symmetry, clamping
 
+**Milestone 3 Tests (4 system tests):**
+- Open-loop constant heater: monotonic temperature increase
+- Open-loop step workload: transient response validation
+- Artifact generation: timeseries.json structure and content
+- Determinism: identical configs produce identical results
+
 Run all tests:
 ```bash
 pytest
 ```
 
-Run only plant model tests:
+Run only unit tests:
 ```bash
 pytest tests/unit/
+```
+
+Run only system tests:
+```bash
+pytest tests/system/
 ```
 
 Tests focus on **contracts and correctness**, not physical fidelity.
@@ -268,7 +288,7 @@ This ensures future refactors do not break downstream consumers.
 - Stable configuration and metric contracts
 - JSON run artifacts
 
-### Milestone 2 (current)
+### Milestone 2 (complete)
 - **Thermal model** ([thermalres/plant/thermal.py](thermalres/plant/thermal.py)):
   - First-order RC network: `dT/dt = (P*R - ΔT) / (R*C)`
   - Euler integration with configurable timestep
@@ -294,8 +314,31 @@ This ensures future refactors do not break downstream consumers.
   - 14 resonator tests: thermo-optic shift, lock boundaries
   - 14 impairment tests: monotonicity, symmetry, smoothness
 
-### Milestone 3 (planned)
-_Controller integration and closed-loop operation._
+### Milestone 3 (current)
+- **PlantRunner** ([thermalres/cosim/plant_runner.py](thermalres/cosim/plant_runner.py)):
+  - Encapsulates plant state evolution
+  - Clean glue layer between kernel and plant models
+  - Maintains thermal state across simulation
+- **Open-loop scenarios** ([thermalres/scenarios/open_loop.py](thermalres/scenarios/open_loop.py)):
+  - `constant_heater()`: Fixed heater/workload schedule
+  - `step_workload()`: Step change at specified cycle
+  - `ramp_workload()`: Linear ramp over time
+  - `heater_off_workload_on()`: Workload-only operation
+- **Kernel integration** ([thermalres/cosim/kernel.py](thermalres/cosim/kernel.py)):
+  - Optional `plant_runner` and `schedule` parameters
+  - Steps plant models at each chunk boundary
+  - Kernel remains time authority
+- **Time-series recording** ([thermalres/cosim/interfaces.py](thermalres/cosim/interfaces.py)):
+  - `TimeSeriesSample` captures plant state + inputs per chunk
+  - Written to `timeseries.json` artifact
+- **System-level tests** ([tests/system/test_open_loop.py](tests/system/test_open_loop.py)):
+  - End-to-end kernel+plant validation
+  - Monotonic behavior checks
+  - Artifact structure validation
+  - Determinism verification
+
+### Milestone 4 (planned)
+_Closed-loop control with PID or bang-bang controller._
 
 ---
 
