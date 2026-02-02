@@ -22,23 +22,22 @@ class PIDParams:
 
 class PIDController:
     """
-    Incremental PID controller for detune regulation.
+    Positional PID controller for detune regulation.
 
     Control law:
-        Δu = kp*e + ki*∫e + kd*de/dt
-        u(t) = u(t-1) + Δu
+        u = bias + kp*e + ki*∫e + kd*de/dt
 
     Where e = detune_error = (detune_nm - target_nm)
 
-    The controller is incremental to maintain operating point at steady-state.
-    This allows the controller to track nonzero setpoints with sustained
-    disturbances (e.g., workload power).
+    Sign convention for heat-only control:
+    - Positive detune: target > resonance → resonator cold → need MORE heat
+    - Negative detune: target < resonance → resonator hot → need LESS heat
 
     Features:
-    - Incremental output (maintains baseline duty)
+    - Positional output (direct response to error)
     - Anti-windup on integrator
-    - Directional unlock boost
-    - Output clamping
+    - Configurable bias for operating point
+    - Output clamping to [0, 1]
     """
 
     def __init__(self, params: PIDParams | None = None):
@@ -51,13 +50,11 @@ class PIDController:
         self.params = params or PIDParams()
         self._integrator: float = 0.0
         self._last_error: float = 0.0
-        self._duty: float = 0.0
 
     def reset(self) -> None:
         """Reset controller state."""
         self._integrator = 0.0
         self._last_error = 0.0
-        self._duty = 0.0
 
     def step(self, inputs: ControlInputs) -> ControlOutputs:
         """
@@ -69,7 +66,9 @@ class PIDController:
         Returns:
             ControlOutputs with commanded heater duty
         """
-        # Calculate error (detune - target)
+        # Calculate error: positive means resonator is cold, need more heat
+        # detune = target - resonance (from resonator model)
+        # error = detune - target_detune = detune when target_detune = 0
         error = inputs.detune_nm - inputs.detune_target_nm
 
         # Proportional term
@@ -88,28 +87,17 @@ class PIDController:
             d_error = 0.0
         d_term = self.params.kd * d_error
 
-        # Compute incremental change (delta)
-        delta = p_term + i_term + d_term
+        # Compute output directly (positional form)
+        # Bias provides a baseline operating point
+        duty = self.params.unlock_boost + p_term + i_term + d_term
 
-        # Update internal duty state
-        self._duty += delta
-
-        # Add directional unlock boost if needed
-        if not inputs.locked:
-            # Boost in the direction that corrects the error
-            # If error > 0: detune is too positive (resonance too high), need more heat
-            # If error < 0: detune is too negative (resonance too low), need less heat
-            boost_direction = 1.0 if error > 0 else -1.0
-            self._duty += self.params.unlock_boost * boost_direction
-
-        # Clamp to valid range
-        self._duty = max(self.params.min_duty,
-                        min(self.params.max_duty, self._duty))
+        # Clamp to valid range [0, 1]
+        duty = max(self.params.min_duty, min(self.params.max_duty, duty))
 
         # Store for next iteration
         self._last_error = error
 
         return ControlOutputs(
-            heater_duty=self._duty,
+            heater_duty=duty,
             error=error,
         )

@@ -1,5 +1,15 @@
-# Artifacts
+# Project-specific generated files
+CLAUDE_CONTEXT.md
+DIRECTORY_STRUCTURE.txt
+
+# macOS
+.DS_Store
+
+# Simulation artifacts
+*.vcd
+*.xml
 artifacts/
+sim_build/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

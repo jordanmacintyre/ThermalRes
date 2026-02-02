@@ -1,132 +1,61 @@
 # ThermalRes
 
-ThermalRes is an incremental project for building a mixed-domain co-simulation framework.
-The project is developed milestone by milestone, with each stage intentionally small and
-self-contained. Early milestones prioritize **architecture, contracts, and determinism**
-over physical fidelity or performance.
+Mixed-domain co-simulation framework for photonic resonator thermal control with digital link monitoring.
 
----
+## Overview
 
-## Design Goals
-
-From the outset, ThermalRes is designed around the following principles:
-
-- **Incremental construction**: each milestone is runnable end-to-end
-- **Stable contracts first**: data shapes and execution flow are locked down early
-- **Explicit time management**: simulated time is structured, not implicit
-- **Determinism by default**: reproducibility is a first-class concern
-- **Artifacts over side effects**: runs produce structured outputs
-
-These goals shape every design decision in Milestone 1.
-
----
-
-## Current Status
-
-**Milestone 4 — Closed-Loop Control and Event Realization (Current)**
-
-The kernel now supports feedback control and deterministic event sampling:
-- **Controller interface**: Pluggable controller protocol with `reset()` and `step()` methods
-- **Bang-bang controller**: Simple threshold-based incremental controller
-- **PID controller**: Incremental PID with anti-windup and directional unlock boost
-- **Closed-loop operation**: Controllers compute heater duty from plant feedback
-- **Event realization**: Bernoulli sampling converts CRC probabilities to binary events
-- **Expanded artifacts**: `events.jsonl` captures per-cycle CRC failure events
-- **System-level tests**: Closed-loop stability, determinism, and convergence validation
-
-**Milestone 3 — Kernel-Plant Integration (Complete)**
-
-The kernel now drives the plant models as the authoritative timebase:
-- **PlantRunner**: Clean glue layer between kernel and plant models
-- **Open-loop scenarios**: Deterministic input schedules (constant, step, ramp)
-- **Time-series artifacts**: Per-chunk plant state recorded to `timeseries.json`
-- **System-level tests**: End-to-end kernel+plant integration validation
-- **Deterministic**: Identical configs produce identical results
-
-**Milestone 2 — Plant Models (Complete)**
-
-Deterministic plant models:
-- **Thermal model**: First-order RC thermal network with heater and workload inputs
-- **Resonator model**: Temperature-dependent photonic resonator with lock detection
-- **Impairment model**: Detuning-based CRC failure probability mapping
-- **Plant chain**: Integrated evaluation function connecting all models
-- **Comprehensive unit tests**: 39 tests validating correctness and monotonic behavior
-
-**Milestone 1 — Execution Skeleton and Contracts (Complete)**
-
-The foundation provides:
-- An installable Python package
-- A stable command-line interface
-- A deterministic execution kernel
-- Explicit time chunking
-- Structured JSON run artifacts
-
-There is **no RTL integration yet**.
-
----
-
-## High-Level Architecture
-
-At a high level, the project currently looks like this:
+ThermalRes simulates a **silicon photonics transceiver** where thermal management is critical for maintaining optical link integrity:
 
 ```
-CLI
- |-- SimConfig (run definition)
-       |-- CoSimKernel (time advancement)
-             |
-             |-- Controller (optional, Milestone 4)
-             |     |-- PIDController or BangBangController
-             |     |-- Computes heater duty from plant feedback
-             |
-             |-- PlantRunner (Milestone 3)
-             |     |-- Maintains ThermalState
-             |     |-- Steps plant chain per chunk
-             |
-             |-- EventSampler (Milestone 4)
-             |     |-- Realizes CRC events from probabilities
-             |
-             |-- Schedule (open-loop scenarios)
-             |     |-- Provides heater/workload inputs
-             |
-             v
-       RunResult:
-         |-- RunMetrics
-         |-- ChunkSummary[]
-         |-- TimeSeriesSample[]
-         |-- CrcEvent[]
-             |
-             v
-       Artifacts:
-         |-- metrics.json
-         |-- timeseries.json
-         |-- events.jsonl
-
-Plant Models (Milestone 2):
-  ThermalState + PlantInputs
-       |
-       v
-  step_thermal() → ThermalState (updated)
-       |
-       v
-  eval_resonator() → ResonatorOutputs (resonance, detune, locked)
-       |
-       v
-  eval_impairment() → ImpairmentOutputs (crc_fail_prob)
-       |
-       v
-  PlantOutputs (combined state)
-
-Control Loop (Milestone 4):
-  PlantOutputs + target_nm
-       |
-       v
-  Controller.step(ControlInputs) → ControlOutputs
-       |
-       v
-  heater_duty → PlantInputs
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        SILICON PHOTONICS CHIP                                │
+│                                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
+│  │   WORKLOAD   │───▶│   THERMAL    │───▶│  RESONATOR   │                   │
+│  │  (CPU heat)  │    │   MODEL      │    │ (wavelength) │                   │
+│  └──────────────┘    │              │    │              │                   │
+│                      │  dT/dt =     │    │  λ = λ₀ +    │                   │
+│  ┌──────────────┐    │  (P·R - ΔT)  │    │  α·(T-T_amb) │                   │
+│  │   HEATER     │───▶│    / τ       │    │              │                   │
+│  │ (controller) │    └──────────────┘    └──────┬───────┘                   │
+│  └──────────────┘           ▲                   │                           │
+│        ▲                    │                   │ detuning                  │
+│        │              heat sink                 ▼                           │
+│        │              (to ambient)      ┌──────────────┐                    │
+│        │                                │  IMPAIRMENT  │                    │
+│        │                                │  |detune| →  │                    │
+│        │                                │  CRC fail %  │                    │
+│        │                                └──────┬───────┘                    │
+│        │                                       │ CRC events                 │
+│        │                                       ▼                            │
+│  ┌─────┴────────┐                      ┌──────────────┐                     │
+│  │ CONTROLLER   │◀─────── feedback ────│ LINK MONITOR │ ◀── RTL validates  │
+│  │ (PID/bang)   │                      │ (RTL/Python) │     this component  │
+│  └──────────────┘                      │ consec_fails │                     │
+│                                        │ → link_up    │                     │
+│                                        └──────────────┘                     │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Each layer has a narrow, well-defined responsibility.
+### System Behavior
+
+- **Temperature** affects resonator wavelength via the thermo-optic effect
+- **Wavelength detuning** causes link impairments (CRC failures on received data)
+- A **digital link monitor** tracks connection health via hysteresis state machine
+- **PID controller** adjusts heater to maintain resonance alignment
+
+The framework supports both Python-only simulation and RTL validation against Verilator/cocotb.
+
+## Features
+
+- **Plant Models**: Thermal RC network, photonic resonator, link impairment probability
+- **Controllers**: PID (incremental with anti-windup) and bang-bang feedback control
+- **Link Monitoring**: Hysteresis state machine with configurable thresholds
+- **RTL Validation**: Optional equivalence checking against SystemVerilog via Verilator
+- **Deterministic**: Seeded simulation for reproducible results
+- **Chunked Execution**: Efficient batched time advancement with configurable chunk size
+- **Structured Artifacts**: JSON outputs for analysis and regression testing
+- **Visualization**: Optional plotting of simulation results (requires matplotlib)
 
 ---
 
@@ -134,312 +63,385 @@ Each layer has a narrow, well-defined responsibility.
 
 ### Requirements
 - Python **3.11 or newer**
-- `pip` (or equivalent Python package manager)
+- `pip` (or equivalent package manager)
+- **Optional**: Verilator + cocotb for RTL validation
+- **Optional**: matplotlib for visualization (`pip install thermalres[plot]`)
 
-### Editable Install (Recommended for Development)
-
-From the repository root:
+### Install (Editable Mode)
 
 ```bash
 python -m pip install -e ".[dev]"
 ```
 
 This installs:
-- the `thermalres` package in editable mode
-- the `thermalres` CLI entrypoint
-- development dependencies (currently `pytest`)
+- The `thermalres` package
+- The `thermalres` CLI command
+- Development dependencies (pytest)
 
-After installation, you should be able to run:
+### Verify Installation
 
 ```bash
 thermalres --help
 ```
 
-or:
+---
+
+## Quick Start
+
+### Basic Simulation
 
 ```bash
-python -m thermalres --help
+# Run a simple simulation
+thermalres --name demo --cycles 100
+
+# Output: artifacts/runs/<timestamp>_demo/metrics.json
 ```
 
-### Verifying the Installation
-
-Run a minimal smoke scenario:
+### With Link Monitoring
 
 ```bash
-thermalres --name smoke --cycles 10 --chunk-cycles 4 --seed 0
+# Enable link state tracking
+thermalres --name demo --cycles 100 --with-link-monitor
+
+# Output includes: link_state.json
 ```
 
-This should create a run artifact under:
+### With RTL Validation (requires Verilator)
 
+```bash
+# Validate Python model against RTL
+thermalres --name demo --cycles 100 --with-link-monitor --validate-rtl
 ```
-artifacts/runs/<timestamp>_smoke/metrics.json
+
+### Run Demo Script
+
+```bash
+# Pulsed AI/ML batch workload with closed-loop control (recommended)
+python sim/demo.py --pulsed --cycles 300 --plot --verbose
+
+# Step workload (constant after warmup)
+python sim/demo.py --cycles 300 --plot --verbose
+
+# Open-loop comparison (no controller - shows need for thermal control)
+python sim/demo.py --pulsed --open-loop --cycles 300 --plot
+
+# RTL validation (requires Verilator)
+python sim/demo.py --validate-rtl --verbose
+
+# Custom pulse timing (60-cycle period, 40% active)
+python sim/demo.py --pulsed --pulse-period 60 --pulse-duty 0.4 --plot
 ```
----
-
-## Execution Flow
-
-1. **CLI Invocation**
-   - Entry points:
-     - `thermalres`
-     - `python -m thermalres`
-   - Both resolve to the same `cli.main()` function.
-
-2. **Run Configuration**
-   - CLI arguments are parsed into a `SimConfig` dataclass.
-   - `SimConfig` defines *what run to execute*, not *how simulation works*.
-   - Fields include:
-     - scenario name
-     - total cycles
-     - chunk size
-     - seed (for future determinism)
-     - output directory override
-
-3. **Kernel Execution**
-   - `CoSimKernel` advances simulated time from `0 → N`.
-   - Time advances in **chunks**, not single cycles.
-   - For each chunk, a `ChunkSummary` is produced.
-
-4. **Artifact Generation**
-   - After execution completes, results are written to disk.
-   - Each run produces a self-contained directory under:
-     ```
-     artifacts/runs/<timestamp>_<scenario>/
-     ```
-   - A single `metrics.json` file captures:
-     - run-level metadata
-     - per-chunk summaries
 
 ---
 
-## Why Chunked Time?
+## Architecture
 
-Chunks are a foundational design choice.
+```
+CLI (thermalres)
+ └── SimConfig
+      └── CoSimKernel (time authority)
+           ├── PlantRunner
+           │    ├── step_thermal()     → ThermalState
+           │    ├── eval_resonator()   → detune_nm, locked
+           │    └── eval_impairment()  → crc_fail_prob
+           │
+           ├── Controller (optional)
+           │    ├── PIDController      → heater_duty
+           │    └── BangBangController → heater_duty
+           │
+           ├── EventSampler
+           │    └── Bernoulli sampling → CrcEvent
+           │
+           └── LinkRunner (optional)
+                ├── LinkMonitorRef (Python)
+                └── RTL validation (Verilator)
+           │
+           v
+      RunResult → Artifacts
+           ├── metrics.json
+           ├── timeseries.json
+           ├── events.jsonl
+           └── link_state.json
+```
 
-A *chunk* is a contiguous range of cycles executed atomically by the kernel.
-The kernel only synchronizes state and emits records at chunk boundaries.
+### Components
 
-Chunks exist now/before any physical models because:
+| Component | Responsibility |
+|-----------|---------------|
+| **CoSimKernel** | Time authority, orchestrates simulation loop |
+| **PlantRunner** | Evaluates thermal → resonator → impairment chain |
+| **Controller** | Computes heater_duty from plant feedback (optional) |
+| **EventSampler** | Realizes CRC events from probabilities (Bernoulli) |
+| **LinkRunner** | Tracks link up/down state from CRC events (optional) |
 
-- Co-simulation requires explicit synchronization points
-- Different domains evolve at different natural rates
-- Per-cycle synchronization is difficult to scale
-- Time structure is difficult to retrofit later
+### Data Flow
 
-Utilizing chunks enables future additions to:
-- Integrate slow and fast models cleanly
-- Aggregate metrics efficiently
-- Synchronize software, hardware, and plant models
-- Trade fidelity for performance without architectural change
-
----
-
-## Data Contracts
-
-The kernel produces two explicit data structures:
-
-### RunMetrics
-Captures run-level metadata:
-- scenario name
-- total cycles
-- total chunks
-- start and finish timestamps
-
-### ChunkSummary
-Captures per-chunk execution windows:
-- chunk index
-- start cycle (inclusive)
-- end cycle (exclusive)
-
-These are implemented as **dataclasses with fixed fields**.
-They are intended to be:
-- Immutable records
-- Easy to serialize
-- Stable across milestones
-
-They represent **interfaces**, not internal implementation details.
+1. **Kernel** advances time in chunks (configurable size)
+2. **Plant models** compute temperature, detuning, CRC failure probability
+3. **EventSampler** realizes CRC events via seeded Bernoulli sampling
+4. **LinkRunner** updates link state based on consecutive failures/passes
+5. **Artifacts** written to disk at end of run
 
 ---
 
 ## Output Artifacts
 
-Every run produces structured artifacts:
+Each run produces a directory under `artifacts/runs/<timestamp>_<name>/`:
 
 ```
-artifacts/
-  runs/
-    <timestamp>_<scenario>/
-      metrics.json       # Run metadata and chunk summaries
-      timeseries.json    # Per-chunk plant state samples (Milestone 3+)
-      events.jsonl       # Per-cycle CRC failure events (Milestone 4+)
+artifacts/runs/20240101_120000_demo/
+├── metrics.json      # Run metadata (cycles, timing, scenario name)
+├── timeseries.json   # Plant state per chunk (temp, detune, CRC prob)
+├── events.jsonl      # CRC events per cycle (streaming JSONL format)
+├── link_state.json   # Link monitor state (if --with-link-monitor)
+└── plot.png          # Visualization (if --plot, requires matplotlib)
 ```
 
-**metrics.json** (Milestone 1):
-- Run-level metadata (name, cycles, chunks, timestamps)
-- Per-chunk summaries (start/end cycles)
+### Visualization (plot.png)
 
-**timeseries.json** (Milestone 3):
-- Per-chunk samples of plant state
-- Temperature, detuning, lock status, CRC failure probability
-- Heater duty and workload fraction
-- Controller error and active status (Milestone 4)
+When `--plot` is enabled, a 4-panel figure is generated showing the simulation dynamics:
 
-**events.jsonl** (Milestone 4):
-- Streaming JSONL format (one JSON object per line)
-- Per-cycle CRC failure events realized from probabilities
-- Deterministic Bernoulli sampling using simulation seed
+1. **Temperature** (top panel) - Shows thermal response over time. When workload increases, temperature rises due to heat dissipation through the RC thermal network.
 
-Artifacts are first-class outputs:
-- They enable regression testing
-- They allow offline analysis
-- They provide a stable integration point for tooling
+2. **Detuning & CRC Probability** (second panel) - Dual-axis plot showing:
+   - *Detuning (nm)*: How far the resonator wavelength has shifted from target due to temperature change (thermo-optic effect)
+   - *CRC Fail Probability*: The resulting link impairment - higher detuning means worse signal quality and more CRC failures
+
+3. **Heater Duty & Workload** (third panel) - Control inputs showing:
+   - *Heater Duty*: Thermal compensation (0-1 scale)
+   - *Workload Fraction*: External heat load representing chip activity
+
+4. **Link State** (bottom panel, if link monitor enabled) - Digital state machine output:
+   - *Green shaded region*: Link is UP (healthy)
+   - *White region*: Link is DOWN (degraded)
+   - *Red/blue lines*: Consecutive failure/pass counters that drive state transitions
+
+This visualization makes it easy to trace cause and effect: workload change → temperature rise → detuning → CRC failures → link state transition.
+
+### Schema Examples
+
+**metrics.json:**
+```json
+{
+  "total_cycles": 100,
+  "total_chunks": 10,
+  "scenario_name": "demo",
+  "start_time": "2024-01-01T12:00:00Z",
+  "finish_time": "2024-01-01T12:00:01Z"
+}
+```
+
+**link_state.json:**
+```json
+[
+  {"cycle": 0, "link_up": true, "consec_fails": 0, "consec_passes": 1},
+  {"cycle": 1, "link_up": true, "consec_fails": 0, "consec_passes": 2}
+]
+```
 
 ---
 
-## Testing Scope
+## CLI Reference
 
-The test suite validates:
-
-**Milestone 1 Tests:**
-- Chunking behavior
-- Metric consistency
-- Artifact creation
-- Schema shape
-
-**Milestone 2 Tests (39 unit tests):**
-- Thermal model: convergence to ambient, steady-state accuracy, input clamping
-- Resonator model: thermo-optic shift, lock/unlock transitions, boundary conditions
-- Impairment model: monotonic probability curves, symmetry, clamping
-
-**Milestone 3 Tests (4 system tests):**
-- Open-loop constant heater: monotonic temperature increase
-- Open-loop step workload: transient response validation
-- Artifact generation: timeseries.json structure and content
-- Determinism: identical configs produce identical results
-
-**Milestone 4 Tests (4 system tests):**
-- Bang-bang controller: lock maintenance under disturbances
-- PID steady-state: convergence and stability with sustained workload
-- Controller stability: no NaN values, proper clamping, bounded outputs
-- Closed-loop determinism: identical seeds produce identical results
-
-Run all tests:
-```bash
-pytest
 ```
+thermalres [OPTIONS]
 
-Run only unit tests:
-```bash
-pytest tests/unit/
+Options:
+  --name NAME           Scenario name for artifacts (default: "default")
+  --cycles N            Total simulation cycles (default: 100)
+  --chunk-cycles N      Cycles per chunk (default: 10)
+  --seed N              Random seed for determinism (default: 0)
+  --out-dir PATH        Output directory override
+
+Link Monitor Options:
+  --with-link-monitor   Enable link state tracking
+  --validate-rtl        Validate against RTL (requires Verilator)
+  --fails-to-down N     Consecutive fails to trigger link down (default: 4)
+  --passes-to-up N      Consecutive passes to trigger link up (default: 8)
 ```
-
-Run only system tests:
-```bash
-pytest tests/system/
-```
-
-Tests focus on **contracts and correctness**, not physical fidelity.
-This ensures future refactors do not break downstream consumers.
 
 ---
 
-## Milestones
+## Testing
 
-### Milestone 1 (complete)
-- Package structure and installation
-- CLI entrypoint
-- Deterministic, chunk-based execution
-- Stable configuration and metric contracts
-- JSON run artifacts
+```bash
+# Run all tests (108 tests)
+pytest tests/ -v
 
-### Milestone 2 (complete)
-- **Thermal model** ([thermalres/plant/thermal.py](thermalres/plant/thermal.py)):
-  - First-order RC network: `dT/dt = (P*R - ΔT) / (R*C)`
-  - Euler integration with configurable timestep
-  - Heater and workload power inputs
-- **Resonator model** ([thermalres/plant/resonator.py](thermalres/plant/resonator.py)):
-  - Thermo-optic wavelength shift: `λ = λ₀ + α*(T - T_amb)`
-  - Lock detection within tolerance window
-  - Detuning calculation (signed)
-- **Impairment model** ([thermalres/plant/impairment.py](thermalres/plant/impairment.py)):
-  - Smooth CRC failure probability vs. detuning
-  - Cubic smoothstep mapping centered at 50% point
-  - Unlocked state forces 100% failure
-- **Plant chain helper** ([thermalres/plant/__init__.py](thermalres/plant/__init__.py)):
-  - `eval_plant_chain()` integrates all three models
-  - Takes `ThermalState` + `PlantInputs`
-  - Returns updated `ThermalState` + `PlantOutputs`
-- **Configuration defaults** ([thermalres/config.py](thermalres/config.py)):
-  - `PlantConfig` dataclass with reasonable defaults
-  - Ambient temp 25°C, R_th=10°C/W, C_th=0.1 J/°C
-  - λ₀=1550nm, α=0.1nm/°C, lock window ±0.5nm
-- **Comprehensive unit tests** ([tests/unit/](tests/unit/)):
-  - 11 thermal tests: convergence, steady-state, immutability
-  - 14 resonator tests: thermo-optic shift, lock boundaries
-  - 14 impairment tests: monotonicity, symmetry, smoothness
+# Unit tests only
+pytest tests/unit/ -v
 
-### Milestone 3 (complete)
-- **PlantRunner** ([thermalres/cosim/plant_runner.py](thermalres/cosim/plant_runner.py)):
-  - Encapsulates plant state evolution
-  - Clean glue layer between kernel and plant models
-  - Maintains thermal state across simulation
-- **Open-loop scenarios** ([thermalres/scenarios/open_loop.py](thermalres/scenarios/open_loop.py)):
-  - `constant_heater()`: Fixed heater/workload schedule
-  - `step_workload()`: Step change at specified cycle
-  - `ramp_workload()`: Linear ramp over time
-  - `heater_off_workload_on()`: Workload-only operation
-- **Kernel integration** ([thermalres/cosim/kernel.py](thermalres/cosim/kernel.py)):
-  - Optional `plant_runner` and `schedule` parameters
-  - Steps plant models at each chunk boundary
-  - Kernel remains time authority
-- **Time-series recording** ([thermalres/cosim/interfaces.py](thermalres/cosim/interfaces.py)):
-  - `TimeSeriesSample` captures plant state + inputs per chunk
-  - Written to `timeseries.json` artifact
-- **System-level tests** ([tests/system/test_open_loop.py](tests/system/test_open_loop.py)):
-  - End-to-end kernel+plant validation
-  - Monotonic behavior checks
-  - Artifact structure validation
-  - Determinism verification
+# System integration tests
+pytest tests/system/ -v
 
-### Milestone 4 (current)
-- **Controller interface** ([thermalres/control/interfaces.py](thermalres/control/interfaces.py)):
-  - `Controller` protocol with `reset()` and `step(inputs) → outputs` methods
-  - `ControlInputs`: dt, temp, detune, locked status, target setpoint
-  - `ControlOutputs`: heater duty and control error
-  - Clean separation between control and plant layers
-- **Bang-bang controller** ([thermalres/control/bang_bang.py](thermalres/control/bang_bang.py)):
-  - Threshold-based incremental controller with deadband
-  - Configurable step size and unlock boost
-  - Maintains internal duty state for bidirectional control
-- **PID controller** ([thermalres/control/pid.py](thermalres/control/pid.py)):
-  - Incremental PID: `Δu = kp*e + ki*∫e + kd*de/dt`, `u(t) = u(t-1) + Δu`
-  - Anti-windup on integrator with configurable bounds
-  - Directional unlock boost (boosts toward correcting error)
-  - Maintains operating point at steady-state with disturbances
-- **Event realization** ([thermalres/cosim/events.py](thermalres/cosim/events.py)):
-  - `EventSampler` converts CRC failure probabilities to binary events
-  - Bernoulli sampling using seeded RNG for determinism
-  - Unlocked state forces CRC failure (probability = 1.0)
-- **Kernel closed-loop support** ([thermalres/cosim/kernel.py](thermalres/cosim/kernel.py)):
-  - Optional `controller` and `detune_target_nm` parameters
-  - Closed-loop mode: controller computes heater duty from plant feedback
-  - Open-loop mode: schedule provides inputs (backward compatible)
-  - First cycle uses schedule, subsequent cycles use controller
-  - `RunResult` dataclass replaces tuple return for stability
-- **Expanded interfaces** ([thermalres/cosim/interfaces.py](thermalres/cosim/interfaces.py)):
-  - `RunResult`: single return object with metrics, chunks, timeseries, events
-  - `CrcEvent`: per-cycle CRC failure event with probability and outcome
-  - `TimeSeriesSample` extended with `controller_error` and `controller_active` fields
-- **Expanded artifacts** ([thermalres/cosim/metrics.py](thermalres/cosim/metrics.py)):
-  - `events.jsonl`: streaming JSONL format (one event per line)
-  - Each event captures cycle, chunk, failure status, and probability
-- **System-level tests** ([tests/system/test_closed_loop.py](tests/system/test_closed_loop.py)):
-  - Bang-bang lock maintenance under step disturbances
-  - PID steady-state convergence with sustained workload
-  - Controller stability (no NaN, proper clamping)
-  - Closed-loop determinism verification
+# RTL equivalence tests (requires Verilator)
+pytest tests/rtl/ -v
+```
 
-### Milestone 5 (planned)
-_RTL integration and hardware-in-the-loop co-simulation._
+---
+
+## Physics Model
+
+### Thermal Dynamics
+
+The thermal model is a first-order RC network with passive cooling to ambient:
+
+```
+dT/dt = (P_in × R_th - ΔT) / τ
+
+where:
+  T      = current temperature (°C)
+  ΔT     = T - T_ambient
+  P_in   = heater_power + workload_power (W)
+  R_th   = thermal resistance to ambient (°C/W)
+  τ      = R_th × C_th = thermal time constant (s)
+  C_th   = thermal capacitance (J/°C)
+```
+
+At steady state (dT/dt = 0):
+```
+T_eq = T_ambient + P_in × R_th
+```
+
+### Heat-Only Control
+
+Real silicon photonics systems **cannot actively cool** individual resonators - they can only add heat. The control strategy is:
+
+1. **Design cold**: The system is designed so the resonator runs *below* target wavelength at ambient temperature
+2. **Heater bias**: The heater provides a thermal "bias" to bring the resonator up to target alignment
+3. **Disturbance rejection**: When workload increases (adding heat), the controller *reduces* heater duty
+4. **Passive cooling**: Natural heat dissipation to ambient handles excess thermal load
+
+This means the controller always works within `0 ≤ heater_duty ≤ 1` - it can only reduce heating, not actively cool.
+
+### Thermo-Optic Effect
+
+Silicon's refractive index changes with temperature, shifting the resonator wavelength:
+
+```
+λ_res = λ₀ + α × (T - T_ambient)
+
+where:
+  λ₀  = nominal resonance at T_ambient (nm)
+  α   = thermo-optic coefficient (~0.01 nm/°C for Si)
+```
+
+### CRC Failure Probability
+
+When the resonator is detuned from the target laser wavelength, optical coupling degrades and bit errors occur in received data. CRC (Cyclic Redundancy Check) detects these corrupted frames:
+
+```
+P_fail = sigmoid(|detune_nm| - threshold)
+```
+
+- Near resonance: P_fail ≈ 0 (clean signal)
+- Far from resonance: P_fail ≈ 1 (corrupted frames)
+
+### Link Monitor State Machine
+
+The digital link monitor uses hysteresis to prevent oscillation:
+
+- **4 consecutive CRC failures** → Link goes DOWN
+- **8 consecutive CRC passes** → Link goes UP
+
+This asymmetry means the link is "sticky" - once down, it requires more evidence of recovery before coming back up.
+
+---
+
+## Design Decisions
+
+### Why Chunked Time?
+
+Chunks provide explicit synchronization points between analog and digital domains:
+- Efficient batched computation
+- Clean state recording boundaries
+- Flexible fidelity vs. performance trade-off
+- Foundation for future multi-rate simulation
+
+### Why Determinism?
+
+All randomness flows through seeded RNGs. Same configuration + seed = identical results.
+This enables:
+- Reproducible debugging
+- Regression testing
+- Controlled experiments
+
+### Python vs RTL: What Runs Where
+
+The simulation divides work between Python and RTL based on what each does best:
+
+**Python (always runs):**
+- **Plant models** (thermal, resonator, impairment) - Continuous-time physics modeled with floating-point math. These represent the analog world and would be impractical in synthesizable RTL.
+- **Co-simulation kernel** - Orchestrates time advancement, event sampling, and artifact generation. Pure coordination logic.
+- **Controllers** (PID, bang-bang) - Feedback algorithms that could be RTL but benefit from rapid prototyping in Python.
+
+**RTL (optional validation):**
+- **Link monitor** (`link_monitor.sv`) - Digital state machine tracking CRC failures. This is the component that would actually be synthesized to silicon, so RTL equivalence matters.
+
+**Why this split?**
+- **Fast iteration**: Python runs in milliseconds; RTL compilation takes seconds to minutes
+- **Physics fidelity**: Plant models need floating-point precision that fixed-point RTL can't match
+- **Verification where it matters**: The link monitor is the only component destined for hardware, so that's where RTL validation adds value
+
+### RTL Validation Strategy
+
+The Python reference model (`LinkMonitorRef`) runs during simulation for speed. RTL validation is an optional post-run check:
+1. Replay the same CRC event sequence through Verilator/cocotb
+2. Sample RTL outputs at each cycle
+3. Compare Python samples against RTL outputs bit-for-bit
+4. Report any mismatches with cycle-level detail
+
+This approach gives fast iteration (Python-only) with optional correctness verification (RTL). When developing the link monitor logic, you can iterate quickly in Python, then validate against RTL before tapeout.
+
+### Link Monitor Hysteresis
+
+The link monitor uses asymmetric thresholds (default: 4 fails to down, 8 passes to up).
+This "stickiness" prevents rapid state oscillation on marginal links - once down,
+the link requires more evidence of recovery before coming back up.
+
+---
+
+## Project Structure
+
+```
+thermalres/
+├── cli.py              # Command-line interface
+├── config.py           # SimConfig and PlantConfig dataclasses
+├── cosim/              # Co-simulation kernel and interfaces
+│   ├── kernel.py       # CoSimKernel - time authority
+│   ├── plant_runner.py # Plant model wrapper
+│   ├── link_runner.py  # Link monitor wrapper
+│   ├── events.py       # CRC event sampling
+│   ├── interfaces.py   # Data contracts (dataclasses)
+│   └── metrics.py      # Artifact writing
+├── plant/              # Analog plant models
+│   ├── thermal.py      # First-order RC thermal network
+│   ├── resonator.py    # Thermo-optic resonator model
+│   └── impairment.py   # CRC failure probability mapping
+├── control/            # Feedback controllers
+│   ├── interfaces.py   # Controller protocol
+│   ├── pid.py          # Incremental PID with anti-windup
+│   └── bang_bang.py    # Threshold-based controller
+├── digital/            # Digital reference models
+│   └── reference.py    # Link monitor Python implementation
+├── rtl/                # RTL integration
+│   └── adapter.py      # Verilator/cocotb adapter
+└── scenarios/          # Input schedules
+    └── open_loop.py    # Constant, step, ramp workloads
+
+rtl/                    # SystemVerilog sources
+├── link_monitor.sv     # Link monitor state machine
+└── top.sv              # Simulation wrapper
+
+sim/                    # Simulation scripts
+├── demo.py             # Full feature demonstration
+└── cocotb/             # Cocotb test infrastructure
+
+tests/                  # Test suite
+├── unit/               # Unit tests for each module
+├── system/             # System integration tests
+└── rtl/                # RTL equivalence tests
+```
 
 ---
 

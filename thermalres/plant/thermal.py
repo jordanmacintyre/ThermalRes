@@ -74,7 +74,8 @@ def step_thermal(
 
     dt_dt = numerator / denominator
 
-    # Euler step
+    # Euler integration: sufficient for slow thermal dynamics where τ = R*C >> dt_s
+    # (typical τ ~ 1-10 seconds, dt_s ~ 0.1 seconds)
     temp_next = state.temp_c + dt_s * dt_dt
 
     return ThermalState(temp_c=temp_next)

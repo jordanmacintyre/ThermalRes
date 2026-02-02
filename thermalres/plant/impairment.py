@@ -74,11 +74,16 @@ def eval_impairment(
     x_50 = (p.detune_50_nm - p.detune_floor_nm) / (p.detune_ceil_nm - p.detune_floor_nm)
     x_50 = max(0.0, min(1.0, x_50))
 
-    # Apply a piecewise smoothstep that ensures f(x_50) ≈ 0.5
-    # Simple approach: scale x to make x_50 map to 0.5
+    # Piecewise linear remapping to use 50% exactly.
+    # Without this, a detune_50_nm that's not centered in [floor, ceil] would
+    # not produce 0.5 probability. This ensures detune_50_nm always maps to 0.5.
+    #
+    # Example: floor=0.0, ceil=0.1, detune_50=0.03
+    #   Input 0.03nm → x=0.3 → x_50=0.3 → rescaled to x_norm=0.5 → smoothstep(0.5)=0.5
     if x_50 > 0.0 and x_50 < 1.0:
-        # Rescale: if x < x_50, map [0, x_50] -> [0, 0.5]
-        # if x >= x_50, map [x_50, 1] -> [0.5, 1]
+        # Piecewise rescaling:
+        # - [0, x_50] maps to [0, 0.5]
+        # - [x_50, 1] maps to [0.5, 1]
         if x <= x_50:
             x_norm = 0.5 * (x / x_50) if x_50 > 0 else 0.0
         else:
