@@ -8,8 +8,8 @@ ThermalRes simulates a **silicon photonics transceiver** where thermal managemen
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        SILICON PHOTONICS CHIP                                │
-│                                                                              │
+│                        SILICON PHOTONICS CHIP                               │
+│                                                                             │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐                   │
 │  │   WORKLOAD   │───▶│   THERMAL    │───▶│  RESONATOR   │                   │
 │  │  (CPU heat)  │    │   MODEL      │    │ (wavelength) │                   │
@@ -29,7 +29,7 @@ ThermalRes simulates a **silicon photonics transceiver** where thermal managemen
 │        │                                       │ CRC events                 │
 │        │                                       ▼                            │
 │  ┌─────┴────────┐                      ┌──────────────┐                     │
-│  │ CONTROLLER   │◀─────── feedback ────│ LINK MONITOR │ ◀── RTL validates  │
+│  │ CONTROLLER   │◀─────── feedback ────│ LINK MONITOR │ ◀── RTL validates   │
 │  │ (PID/bang)   │                      │ (RTL/Python) │     this component  │
 │  └──────────────┘                      │ consec_fails │                     │
 │                                        │ → link_up    │                     │
