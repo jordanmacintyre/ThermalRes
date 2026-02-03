@@ -31,17 +31,20 @@ link monitor integration. Showcases:
    - timeseries.json: Plant state over time
    - events.json: CRC failure events
    - link_state.json: Link monitor state history
-   - plot.png: Visualization of simulation results (optional)
+   - plot.png: Visualization of simulation results (default, use --no-plot to skip)
 
 Usage:
     # Run with closed-loop control (default):
-    python sim/demo.py --cycles 300 --plot
+    python sim/demo.py --cycles 300
 
     # Run open-loop (no controller, temperature rises with workload):
-    python sim/demo.py --cycles 300 --open-loop --plot
+    python sim/demo.py --cycles 300 --open-loop
 
-    # Run with RTL validation (requires Verilator):
-    python sim/demo.py --validate-rtl
+    # Run with RTL co-simulation (requires Verilator + cocotb):
+    python sim/demo.py --cycles 300
+
+    # Run Python-only (no RTL/Verilator needed):
+    python sim/demo.py --no-rtl --cycles 300
 
     # Run with custom workload schedule:
     python sim/demo.py --warmup-cycles 50 --warmup-workload 0.3 --disturbance-workload 0.8
@@ -77,6 +80,75 @@ from thermalres.plant import ImpairmentParams, ResonatorParams, ThermalParams
 def check_verilator_available() -> bool:
     """Check if Verilator is available on PATH."""
     return shutil.which("verilator") is not None
+
+
+def run_cocotb_simulation(args: argparse.Namespace, config: SimConfig) -> int:
+    """
+    Run the simulation using cocotb with RTL link_monitor.
+
+    This invokes the cocotb test which drives the simulation loop,
+    calling Python plant models on each clock cycle.
+
+    Args:
+        args: Parsed command-line arguments
+        config: Simulation configuration
+
+    Returns:
+        Exit code: 0 for success, non-zero for errors
+    """
+    import json
+    import os
+    import subprocess
+
+    print("Running cocotb RTL co-simulation...")
+
+    # Build config dict for cocotb
+    cosim_config = {
+        "cycles": args.cycles,
+        "seed": args.seed,
+        "warmup_cycles": args.warmup_cycles,
+        "warmup_workload": args.warmup_workload,
+        "disturbance_workload": args.disturbance_workload,
+        "pulsed": args.pulsed,
+        "pulse_period": args.pulse_period,
+        "pulse_duty": args.pulse_duty,
+        "fails_to_down": args.fails_to_down,
+        "passes_to_up": args.passes_to_up,
+    }
+
+    # Set up environment
+    env = os.environ.copy()
+    env["SIM_CONFIG"] = json.dumps(cosim_config)
+    env["SIM_OUT_DIR"] = str(config.out_dir)
+
+    # Determine test case based on control mode
+    if args.open_loop:
+        testcase = "test_open_loop_simulation"
+    else:
+        testcase = "test_closed_loop_simulation"
+
+    # Run cocotb via make
+    cocotb_dir = project_root / "sim" / "cocotb"
+    cmd = ["make", f"TESTCASE={testcase}"]
+
+    print(f"  Command: {' '.join(cmd)}")
+    print(f"  Working dir: {cocotb_dir}")
+    print()
+
+    result = subprocess.run(
+        cmd,
+        cwd=cocotb_dir,
+        env=env,
+        # Don't capture output - let it stream to terminal
+    )
+
+    if result.returncode != 0:
+        print(f"ERROR: cocotb simulation failed with exit code {result.returncode}")
+        return result.returncode
+
+    print()
+    print("cocotb simulation completed successfully")
+    return 0
 
 
 def create_workload_schedule(
@@ -153,20 +225,23 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python sim/demo.py --cycles 300 --plot
-      Run with step workload and closed-loop PID control
+  python sim/demo.py --cycles 300
+      Run with step workload and closed-loop PID control (plot saved by default)
 
-  python sim/demo.py --pulsed --cycles 300 --plot
+  python sim/demo.py --pulsed --cycles 300
       Run with pulsed AI/ML batch workload (recommended)
 
-  python sim/demo.py --open-loop --pulsed --cycles 300 --plot
+  python sim/demo.py --open-loop --pulsed --cycles 300
       Run pulsed workload without controller (shows need for control)
 
-  python sim/demo.py --validate-rtl
-      Run with RTL validation (requires Verilator)
+  python sim/demo.py --no-rtl --cycles 300
+      Run Python-only mode (no Verilator needed)
 
   python sim/demo.py --pulsed --pulse-period 60 --pulse-duty 0.4
       Custom pulse timing (60-cycle period, 40% duty cycle)
+
+  python sim/demo.py --cycles 300 --no-plot
+      Skip plot generation
 """,
     )
 
@@ -256,11 +331,16 @@ Examples:
         help="Workload noise std deviation [0-1] (default: %(default)s)",
     )
 
-    # RTL validation
+    # RTL mode
+    parser.add_argument(
+        "--no-rtl",
+        action="store_true",
+        help="Use Python-only simulation (no RTL, no Verilator needed)",
+    )
     parser.add_argument(
         "--validate-rtl",
         action="store_true",
-        help="Validate link monitor against RTL simulation (requires Verilator)",
+        help="[Deprecated] Use --no-rtl instead. Legacy post-run RTL validation.",
     )
 
     # Output options
@@ -271,14 +351,14 @@ Examples:
         help="Print detailed simulation progress",
     )
     parser.add_argument(
-        "--plot",
+        "--no-plot",
         action="store_true",
-        help="Generate visualization plot (requires matplotlib)",
+        help="Skip plot generation (plots are saved by default)",
     )
     parser.add_argument(
         "--show-plot",
         action="store_true",
-        help="Display plot interactively (implies --plot)",
+        help="Display plot interactively after saving",
     )
 
     return parser.parse_args()
@@ -300,16 +380,21 @@ def run_demo(args: argparse.Namespace) -> int:
     print()
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Step 1: Check RTL validation prerequisites
+    # Step 1: Check RTL prerequisites and determine simulation mode
     # ─────────────────────────────────────────────────────────────────────────
-    if args.validate_rtl:
+    use_rtl_cosim = not args.no_rtl
+
+    if use_rtl_cosim:
         if not check_verilator_available():
-            print("ERROR: --validate-rtl requires Verilator")
+            print("ERROR: RTL co-simulation requires Verilator")
             print("Install with: conda install -c conda-forge verilator")
+            print("Or use --no-rtl for Python-only simulation")
             return 1
-        print("[RTL] Verilator found - RTL validation enabled")
+        print("[RTL] Verilator found - RTL co-simulation enabled")
+        print("      cocotb will drive the simulation loop")
     else:
-        print("[RTL] RTL validation disabled (use --validate-rtl to enable)")
+        print("[RTL] Python-only mode (--no-rtl)")
+        print("      Using Python reference model for link_monitor")
     print()
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -341,6 +426,17 @@ def run_demo(args: argparse.Namespace) -> int:
         seed=args.seed,
         out_dir=None,  # Use default timestamp-based directory
     )
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Branch: RTL co-simulation vs Python-only
+    # ─────────────────────────────────────────────────────────────────────────
+    if use_rtl_cosim:
+        # Run via cocotb - it handles plant models, controller, and artifacts
+        return run_cocotb_simulation(args, config)
+
+    # Continue with Python-only simulation below...
+    print("Running Python-only simulation...")
+    print()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Step 3: Create plant runner with parameters designed for heat-only control
@@ -603,9 +699,9 @@ def run_demo(args: argparse.Namespace) -> int:
     print("  - link_state.json: Link monitor state history")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Step 12: Generate plot (if requested)
+    # Step 12: Generate plot (default: always, unless --no-plot)
     # ─────────────────────────────────────────────────────────────────────────
-    generate_plot = args.plot or args.show_plot
+    generate_plot = not args.no_plot
     if generate_plot:
         try:
             from thermalres.cosim.plotting import plot_simulation_results

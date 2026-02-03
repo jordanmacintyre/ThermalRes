@@ -97,9 +97,14 @@ Examples:
         help="Enable link monitor state tracking",
     )
     p.add_argument(
+        "--no-rtl",
+        action="store_true",
+        help="Use Python-only simulation (no RTL, no Verilator needed)",
+    )
+    p.add_argument(
         "--validate-rtl",
         action="store_true",
-        help="Validate link monitor against RTL simulation (requires Verilator)",
+        help="[Deprecated] Legacy post-run RTL validation. Use --no-rtl instead.",
     )
     p.add_argument(
         "--fails-to-down",
