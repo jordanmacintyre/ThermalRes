@@ -70,18 +70,34 @@ cocotb drives the simulation loop, calling Python plant models on each RTL clock
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     cocotb Test (Python)                        │
-│                                                                 │
-│  for each cycle:                                                │
-│    1. Python: step plant model → crc_fail_prob                  │
-│    2. Python → RTL: write crc_fail_prob (Q0.16 fixed-point)     │
-│    3. RTL: LFSR generates crc_fail event                        │
-│    4. RTL: link_monitor updates state (hysteresis FSM)          │
-│    5. cocotb: wait for rising clock edge                        │
-│    6. RTL → Python: read link_up, consec_fails, etc.            │
-│    7. Python: record samples for artifacts                      │
+│  cocotb Test (Drives Loop)                                      │
+│  ┌─────────────────┐      ┌──────────────────────────────────┐  │
+│  │  PlantAdapter   │◄────►│ ThermalPlant                     │  │
+│  │  (RTL bridge)   │      │ (thermal, resonator, impairment) │  │
+│  └────────┬────────┘      └──────────────────────────────────┘  │
+│           │                                                     │
+│           │ crc_fail_prob (Q0.16) ↓        ↑ link_up, counters  │
+│           │                                                     │
+├───────────┼─────────────────────────────────────────────────────┤
+│  RTL      │                                                     │
+│  ┌────────▼───────────────────────────────────────────────────┐ │
+│  │  cosim_top.sv                                              │ │
+│  │  ┌───────────────┐    ┌──────────────────────────┐         │ │
+│  │  │ LFSR sampler  │───►│ link_monitor             │         │ │
+│  │  │ (Bernoulli)   │    │ (hysteresis state mach)  │         │ │
+│  │  └───────────────┘    └──────────────────────────┘         │ │
+│  └────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Per-cycle flow:**
+1. Python: step plant model → `crc_fail_prob`
+2. Python → RTL: write `crc_fail_prob` (Q0.16 fixed-point)
+3. RTL: LFSR generates `crc_fail` event (Bernoulli sampling)
+4. RTL: `link_monitor` updates state (hysteresis FSM)
+5. cocotb: wait for rising clock edge
+6. RTL → Python: read `link_up`, `consec_fails`, etc.
+7. Python: record samples for artifacts
 
 The RTL module (`cosim_top.sv`) contains:
 - **LFSR**: 32-bit linear feedback shift register for pseudorandom event generation
